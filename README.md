@@ -1,31 +1,36 @@
-I see your network configuration has changed. You now have two network interfaces:
+I understand you want the client to take an IP from the first pool that you defined rather than changing the pool. Let's troubleshoot why it's not taking an IP from your intended pool.
 
-1. `enp3s0` - This doesn't show an IP address in the output
-2. `ens224` - This has IP address 192.168.5.129/24
+Based on your network configuration, I see that your interface ens160 has the IP addresses 192.168.250.179 and 192.168.250.180. This suggests your DHCP server is operating on the 192.168.250.0/24 network.
 
-Let's configure DHCP to work with the `ens224` interface since it has an IP address. Here's what we'll do:
+Let's do the following:
 
-1. First, set the correct interface in the DHCP configuration:
+1. First, let's verify what pool you want to use. What is the IP range you want your clients to use?
+
+2. Let's check your current DHCP configuration to see what pools are defined:
+
+```bash
+sudo cat /etc/dhcp/dhcpd.conf
+```
+
+3. Make sure the DHCP service is configured to listen on the correct interface:
 
 ```bash
 sudo nano /etc/sysconfig/dhcpd
 ```
 
-Change it to:
+Set it to:
 ```
-DHCPDARGS="ens224"
+DHCPDARGS="ens160"  # Ensure this is the interface connected to the client network
 ```
 
-2. Update your DHCP configuration to match your current network settings:
+4. To fix the client not getting an IP from your desired pool, modify your dhcpd.conf to only include the subnet for your intended pool. For example, if you want clients to use 192.168.1.0/24:
 
 ```bash
 sudo nano /etc/dhcp/dhcpd.conf
 ```
 
-Replace the content with:
-
 ```
-# Basic DHCP configuration with DDNS
+# DHCP with DDNS Configuration
 authoritative;
 
 # Define the DDNS key
@@ -37,126 +42,87 @@ key "ddns-key" {
 # DDNS configuration
 ddns-update-style interim;
 ddns-updates on;
-ignore client-updates;
+update-static-leases on;
+ddns-hostname = concat("client-", binary-to-ascii(10, 8, "-", leased-address));
+ddns-domainname "est.intra";
+allow unknown-clients;
+use-host-decl-names on;
 
 # Domain settings
 option domain-name "est.intra";
-option domain-name-servers 192.168.5.129;  # Using your ens224 IP
+option domain-name-servers 192.168.250.179;
 
 # DDNS zones
 zone est.intra. {
-  primary 192.168.5.129;  # Using your ens224 IP
+  primary 192.168.250.179;
   key ddns-key;
 }
 
-zone 5.168.192.in-addr.arpa. {  # Notice the change to match 192.168.5.x network
-  primary 192.168.5.129;  # Using your ens224 IP
+zone 1.168.192.in-addr.arpa. {
+  primary 192.168.250.179;
   key ddns-key;
 }
 
-# Network configuration - using your ens224 network
-subnet 192.168.5.0 netmask 255.255.255.0 {
-  range 192.168.5.130 192.168.5.200;  # Range starts after your server IP
-  option routers 192.168.5.129;  # Using your ens224 IP
+# Network configuration
+subnet 192.168.1.0 netmask 255.255.255.0 {
+  range 192.168.1.100 192.168.1.200;
+  option routers 192.168.1.1;
   default-lease-time 3600;
   max-lease-time 7200;
 }
+
+# You must also declare the network where your DHCP server is located
+subnet 192.168.250.0 netmask 255.255.255.0 {
+  # This is just to tell DHCP server it's on this network
+  # No range is defined so no IPs will be assigned from this network
+}
 ```
 
-3. Update your DNS server configuration:
-
-```bash
-sudo nano /etc/named.conf
-```
-
-Change the listen-on line and any IP references:
-```
-listen-on port 53 { 127.0.0.1; 192.168.5.129; };
-allow-query { localhost; 192.168.5.0/24; };
-```
-
-4. Update your zone files:
-
-```bash
-sudo nano /var/named/est.intra.zone
-```
-
-Change to:
-```
-$TTL 86400
-@       IN      SOA     dns.est.intra. admin.est.intra. (
-                        2023032901      ; Serial
-                        3600            ; Refresh (1 hour)
-                        1800            ; Retry (30 minutes)
-                        604800          ; Expire (1 week)
-                        86400 )         ; Minimum TTL (1 day)
-;
-@       IN      NS      dns.est.intra.
-dns     IN      A       192.168.5.129
-```
-
-5. Create or update the reverse zone file for the 192.168.5.x network:
-
-```bash
-sudo nano /var/named/5.168.192.in-addr.arpa.zone
-```
-
-Add:
-```
-$TTL 86400
-@       IN      SOA     dns.est.intra. admin.est.intra. (
-                        2023032901      ; Serial
-                        3600            ; Refresh (1 hour)
-                        1800            ; Retry (30 minutes)
-                        604800          ; Expire (1 week)
-                        86400 )         ; Minimum TTL (1 day)
-;
-@       IN      NS      dns.est.intra.
-129     IN      PTR     dns.est.intra.  ; Your server IP's last octet
-```
-
-6. Update the zone reference in named.conf to point to the new reverse zone file:
+5. For DDNS to work properly with the 192.168.1.0/24 pool, update your reverse zone in named.conf:
 
 ```bash
 sudo nano /etc/named.conf
 ```
 
-Find the reverse zone section and change it to:
 ```
-zone "5.168.192.in-addr.arpa" IN {
+zone "1.168.192.in-addr.arpa" IN {
     type master;
-    file "5.168.192.in-addr.arpa.zone";
+    file "1.168.192.in-addr.arpa.zone";
     allow-update { key "ddns-key"; };
 };
 ```
 
-7. Set the correct permissions:
+6. Create or update the reverse zone file:
 
 ```bash
-sudo chown named:named /var/named/est.intra.zone
-sudo chown named:named /var/named/5.168.192.in-addr.arpa.zone
+sudo nano /var/named/1.168.192.in-addr.arpa.zone
 ```
 
-8. Check your configurations for errors:
+```
+$TTL 86400
+@       IN      SOA     dns.est.intra. admin.est.intra. (
+                        2023032902      ; Serial
+                        3600            ; Refresh
+                        1800            ; Retry
+                        604800          ; Expire
+                        86400 )         ; Minimum TTL
+;
+@       IN      NS      dns.est.intra.
+```
+
+7. Set correct permissions:
 
 ```bash
-sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
-sudo named-checkconf
-sudo named-checkzone est.intra /var/named/est.intra.zone
-sudo named-checkzone 5.168.192.in-addr.arpa /var/named/5.168.192.in-addr.arpa.zone
+sudo chown named:named /var/named/1.168.192.in-addr.arpa.zone
 ```
 
-9. Restart the services:
+8. Verify your network interfaces and routing to ensure the clients can reach the DHCP server and receive offers from the correct subnet.
+
+9. Restart services:
 
 ```bash
 sudo systemctl restart named
 sudo systemctl restart dhcpd
 ```
 
-If you still have issues, run DHCP in debug mode to see the exact error:
-
-```bash
-sudo dhcpd -d -f -cf /etc/dhcp/dhcpd.conf
-```
-
-This will show you detailed error messages that can help identify the problem.
+If your client is still not getting an IP from the desired pool, you may need to check network connectivity between the client and server, or consider if there's another DHCP server on the network interfering with yours.
