@@ -1,25 +1,25 @@
-I can see from your error logs that you're having a configuration file error in your DHCP server. The specific error is:
+I see the issue now. Your network interface is "enp3s0" and it has an IP address of 192.168.1.24, not 192.168.1.1 as we assumed in the configuration. Let's fix your DHCP configuration to match your actual network setup.
 
-```
-Configuration file errors encountered -- exiting
-```
+Follow these steps:
 
-Let's fix the DHCP configuration file by creating a simpler, correct configuration. Here's what we'll do:
-
-1. First, let's check your DHCP configuration for syntax errors:
+1. First, let's check if DHCP is configured to use the correct interface:
 
 ```bash
-sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
+sudo nano /etc/sysconfig/dhcpd
 ```
 
-2. Let's create a new, clean DHCP configuration file:
+Change it to:
+```
+DHCPDARGS="enp3s0"
+```
+
+2. Now let's update your DHCP configuration to match your actual network settings:
 
 ```bash
-sudo mv /etc/dhcp/dhcpd.conf /etc/dhcp/dhcpd.conf.bak
 sudo nano /etc/dhcp/dhcpd.conf
 ```
 
-3. Add this simplified configuration to the file:
+Replace the content with:
 
 ```
 # Basic DHCP configuration with DDNS
@@ -38,94 +38,87 @@ ignore client-updates;
 
 # Domain settings
 option domain-name "est.intra";
-option domain-name-servers 192.168.1.1;
+option domain-name-servers 192.168.1.24;  # Using your actual IP
 
 # DDNS zones
 zone est.intra. {
-  primary 192.168.1.1;
+  primary 192.168.1.24;  # Using your actual IP
   key ddns-key;
 }
 
 zone 1.168.192.in-addr.arpa. {
-  primary 192.168.1.1;
+  primary 192.168.1.24;  # Using your actual IP
   key ddns-key;
 }
 
-# Network configuration
+# Network configuration - using your actual network
 subnet 192.168.1.0 netmask 255.255.255.0 {
   range 192.168.1.100 192.168.1.200;
-  option routers 192.168.1.1;
+  option routers 192.168.1.24;  # Using your actual IP
   default-lease-time 3600;
   max-lease-time 7200;
 }
 ```
 
-4. Check if there's an issue with your network interface. Make sure the DHCP server knows which interface to use:
-
-```bash
-sudo nano /etc/sysconfig/dhcpd
-```
-
-Add your network interface (like eth0 or enp0s3):
-
-```
-DHCPDARGS="eth0"  # Replace with your actual interface
-```
-
-5. Check if your IP is correctly set on the interface:
-
-```bash
-ip addr
-```
-
-If your server doesn't have the 192.168.1.1 IP address, set it:
-
-```bash
-sudo ip addr add 192.168.1.1/24 dev eth0  # Replace eth0 with your interface
-```
-
-6. Check for syntax errors in the new configuration:
-
-```bash
-sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
-```
-
-7. Start the DHCP service:
-
-```bash
-sudo systemctl restart dhcpd
-```
-
-If you're still experiencing issues, there might be a problem with the interaction between DHCP and DNS. Make sure that the key in both configurations matches exactly.
-
-Check your named.conf file to ensure the key section matches:
+3. Also, make sure your DNS configuration (named.conf) is updated to listen on your actual IP:
 
 ```bash
 sudo nano /etc/named.conf
 ```
 
-The key section in named.conf should look like:
-
+Change the listen-on line to:
 ```
-key "ddns-key" {
-    algorithm hmac-sha256;
-    secret "YourStaticSecretKey123456789";
-};
+listen-on port 53 { 127.0.0.1; 192.168.1.24; };
 ```
 
-Make sure the secret is exactly the same in both the DHCP and DNS configuration files.
+And update any other references to 192.168.1.1 to 192.168.1.24 in your named.conf file.
 
-After making these changes, restart both services:
+4. Also check your zone files to make sure they reference the correct IP:
+
+```bash
+sudo nano /var/named/est.intra.zone
+```
+
+Update the A record for the DNS server to:
+```
+dns     IN      A       192.168.1.24
+```
+
+```bash
+sudo nano /var/named/1.168.192.in-addr.arpa.zone
+```
+
+Update the PTR record to reference the correct IP:
+```
+24      IN      PTR     dns.est.intra.  # Your server IP's last octet
+```
+
+5. After making these changes, check the configuration for errors:
+
+```bash
+sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
+sudo named-checkconf
+```
+
+6. Restart the services:
 
 ```bash
 sudo systemctl restart named
 sudo systemctl restart dhcpd
 ```
 
-If you're still encountering issues, please let me know the specific error message from:
+If the DHCP service still fails to start, run:
 
 ```bash
-sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
+sudo dhcpd -d -f -cf /etc/dhcp/dhcpd.conf
 ```
 
-This will help identify the exact syntax error in your configuration.
+This will run DHCP in the foreground with debug output, which should show exactly what's causing the error.
+
+Another common issue could be that you have another DHCP server running on the same network, or there's a port conflict. Make sure no other DHCP services are running:
+
+```bash
+sudo ss -tulpn | grep 67
+```
+
+If anything shows up, you'll need to stop that service before starting dhcpd.
