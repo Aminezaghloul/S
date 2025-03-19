@@ -1,0 +1,114 @@
+I can see that you're encountering an error with the DHCP service failing to start. Let's fix this issue.
+
+The error message shows:
+```
+Job for dhcpd.service failed because the control process exited with error code.
+See "systemctl status dhcpd.service" and "journalctl -xeu dhcpd.service" for details.
+```
+
+First, let's check the detailed error message to understand what's causing the problem:
+
+```bash
+sudo systemctl status dhcpd.service
+```
+
+And also check the journal logs:
+
+```bash
+sudo journalctl -xeu dhcpd.service
+```
+
+Based on common issues with DHCP service failures, here are some possible solutions:
+
+1. Check your DHCP configuration file for syntax errors:
+
+```bash
+sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
+```
+
+2. The most likely issue is a syntax error in your dhcpd.conf file. Let's edit it and make sure it's correct:
+
+```bash
+sudo nano /etc/dhcp/dhcpd.conf
+```
+
+Here's a simplified and corrected DHCP configuration with DDNS that should work:
+
+```
+# DHCP with DDNS Configuration
+authoritative;
+
+# Define the DDNS key (must match the key in named.conf)
+key "ddns-key" {
+    algorithm hmac-sha256;
+    secret "YourStaticSecretKey123456789";
+}
+
+# Basic DDNS configuration
+ddns-update-style interim;
+ddns-updates on;
+update-static-leases on;
+ignore client-updates;
+
+# Domain configuration
+option domain-name "est.intra";
+option domain-name-servers 192.168.1.1;
+
+# DDNS zones
+zone est.intra. {
+    primary 192.168.1.1;
+    key ddns-key;
+}
+
+zone 1.168.192.in-addr.arpa. {
+    primary 192.168.1.1;
+    key ddns-key;
+}
+
+# Subnet declaration
+subnet 192.168.1.0 netmask 255.255.255.0 {
+    range 192.168.1.100 192.168.1.200;
+    option routers 192.168.1.1;
+    default-lease-time 3600;
+    max-lease-time 7200;
+}
+```
+
+3. Make sure you have the correct interface specified for DHCP. Check which interface DHCP should be listening on:
+
+```bash
+ip a
+```
+
+Then edit the DHCP service configuration:
+
+```bash
+sudo nano /etc/sysconfig/dhcpd
+```
+
+Add your network interface name to the DHCPDARGS line:
+```
+DHCPDARGS="eth0"  # Replace eth0 with your actual interface name
+```
+
+4. Ensure your network interface is up and has the correct IP:
+
+```bash
+sudo ip addr add 192.168.1.1/24 dev eth0  # Replace eth0 with your interface name
+sudo ip link set eth0 up
+```
+
+5. If the above doesn't work, check for any conflicting DHCP servers on your network and also check for permission issues:
+
+```bash
+sudo chown root:root /etc/dhcp/dhcpd.conf
+sudo chmod 644 /etc/dhcp/dhcpd.conf
+```
+
+After making these changes, try restarting the DHCP service:
+
+```bash
+sudo systemctl restart dhcpd
+```
+
+If you're still facing issues, please share the output of `systemctl status dhcpd.service` so I can provide more specific guidance.
