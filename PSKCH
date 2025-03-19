@@ -1,158 +1,124 @@
-I'll help you set up DHCP with DDNS in your virtual machine environment where one machine will run both the DHCP and DNS servers, and the other will be a client that automatically gets its IP address and hostname registered in the DNS zone files whenever it connects to the network.
+I'll help you set up DHCP and DDNS (Dynamic DNS) on your virtual machines so that whenever a client connects, it automatically gets an IP address and its hostname is added to the DNS zone files. I'll simplify the configuration by using a static secret key instead of generating one with dnssec-keygen.
 
-Here's a complete configuration guide based on the PDF information:
+# Configuring DHCP with DDNS on Fedora Server
 
-# DHCP and DDNS Configuration Guide for Fedora Server
+## Prerequisites
+- You have two virtual machines:
+  - Server VM with Fedora Server installed (will host DHCP and DNS)
+  - Client VM (will be the DHCP client)
 
-## 1. Install Required Packages on Server VM
-
-First, install the necessary packages on your DHCP/DNS server:
-
-```bash
-sudo dnf install dhcp-server bind bind-utils
-```
-
-## 2. Generate DDNS Key for Secure Updates
-
-Create a shared key for secure communication between DHCP and DNS:
+## Step 1: Install Required Packages on the Server
 
 ```bash
-# Generate a key file
-dnssec-keygen -a HMAC-SHA256 -b 256 -n HOST ddns-key
-
-# View the key
-cat Kddns-key.*.key
+sudo dnf install bind bind-utils dhcp-server
 ```
 
-You'll see output similar to this:
-```
-ddns-key. IN KEY 512 3 165 mPUoqzBVMvxEcMmL3AzS0QgbcOcq0po2l8Z2NJvkqJA=
-```
+## Step 2: Configure BIND DNS Server
 
-## 3. Create DNSSEC Key Configuration File
-
-Create a key configuration file that both BIND and DHCP will use:
-
-```bash
-sudo nano /etc/named/ddns.key
-```
-
-Add the following content (replace the key with your generated key):
-
-```
-key "ddns-key" {
-    algorithm hmac-sha256;
-    secret "mPUoqzBVMvxEcMmL3AzS0QgbcOcq0po2l8Z2NJvkqJA=";
-};
-```
-
-Set proper permissions:
-```bash
-sudo chmod 640 /etc/named/ddns.key
-sudo chown root:named /etc/named/ddns.key
-```
-
-## 4. Configure BIND DNS Server
-
-### Edit the main configuration file:
+### Edit the main BIND configuration file
 
 ```bash
 sudo nano /etc/named.conf
 ```
 
-Add the following at the top to include our key:
-```
-include "/etc/named/ddns.key";
-```
+Add the following configuration:
 
-Configure the options section:
 ```
 options {
-    listen-on port 53 { 127.0.0.1; 192.168.1.1; };  // Replace with your server IP
+    listen-on port 53 { 127.0.0.1; 192.168.1.1; };  // Change 192.168.1.1 to your server's IP
     listen-on-v6 port 53 { ::1; };
     directory "/var/named";
     dump-file "/var/named/data/cache_dump.db";
     statistics-file "/var/named/data/named_stats.txt";
     memstatistics-file "/var/named/data/named_mem_stats.txt";
-    allow-query { localhost; 192.168.1.0/24; };  // Your network
+    allow-query { localhost; 192.168.1.0/24; };  // Adjust to your network
     recursion yes;
-    dnssec-enable yes;
-    dnssec-validation yes;
+    
+    // DDNS configuration
+    allow-new-zones yes;
 };
 
+// Define the DDNS key for secure updates
+key "ddns-key" {
+    algorithm hmac-sha256;
+    secret "YourStaticSecretKey123456789";  // Simple static key for prototype
+};
+
+// Configure logging
 logging {
     channel default_debug {
         file "data/named.run";
         severity dynamic;
     };
 };
-```
 
-Configure the forward and reverse zones:
-```
-zone "est.intra" IN {
+// Forward zone configuration
+zone "mydomain.local" IN {
     type master;
-    file "est.intra.zone";
-    allow-update { key "ddns-key"; };  // Allow updates with our key
+    file "mydomain.local.zone";
+    allow-update { key "ddns-key"; };  // Allow updates using the key
 };
 
+// Reverse zone configuration
 zone "1.168.192.in-addr.arpa" IN {
     type master;
     file "1.168.192.in-addr.arpa.zone";
-    allow-update { key "ddns-key"; };  // Allow updates with our key
+    allow-update { key "ddns-key"; };  // Allow updates using the key
 };
 ```
 
-### Create the forward zone file:
+### Create the forward zone file
 
 ```bash
-sudo nano /var/named/est.intra.zone
+sudo nano /var/named/mydomain.local.zone
 ```
 
 Add the following content:
+
 ```
 $TTL 86400
-@ IN SOA ns1.est.intra. admin.est.intra. (
-    2023032001  ; Serial
-    3600        ; Refresh
-    1800        ; Retry
-    604800      ; Expire
-    86400 )     ; Minimum TTL
-
-@       IN NS   ns1.est.intra.
-ns1     IN A    192.168.1.1  ; Your server IP
+@       IN      SOA     ns1.mydomain.local. admin.mydomain.local. (
+                        2023032901      ; Serial
+                        3600            ; Refresh (1 hour)
+                        1800            ; Retry (30 minutes)
+                        604800          ; Expire (1 week)
+                        86400 )         ; Minimum TTL (1 day)
+;
+@       IN      NS      ns1.mydomain.local.
+ns1     IN      A       192.168.1.1     ; Your server IP
 ```
 
-### Create the reverse zone file:
+### Create the reverse zone file
 
 ```bash
 sudo nano /var/named/1.168.192.in-addr.arpa.zone
 ```
 
 Add the following content:
+
 ```
 $TTL 86400
-@ IN SOA ns1.est.intra. admin.est.intra. (
-    2023032001  ; Serial
-    3600        ; Refresh
-    1800        ; Retry
-    604800      ; Expire
-    86400 )     ; Minimum TTL
-
-@       IN NS   ns1.est.intra.
-1       IN PTR  ns1.est.intra.  ; Your server IP's last octet
+@       IN      SOA     ns1.mydomain.local. admin.mydomain.local. (
+                        2023032901      ; Serial
+                        3600            ; Refresh (1 hour)
+                        1800            ; Retry (30 minutes)
+                        604800          ; Expire (1 week)
+                        86400 )         ; Minimum TTL (1 day)
+;
+@       IN      NS      ns1.mydomain.local.
+1       IN      PTR     ns1.mydomain.local.  ; Your server IP's last octet
 ```
 
-### Set permissions:
+### Set correct permissions for the zone files
 
 ```bash
-sudo chown named:named /var/named/est.intra.zone
+sudo chown named:named /var/named/mydomain.local.zone
 sudo chown named:named /var/named/1.168.192.in-addr.arpa.zone
 ```
 
-## 5. Configure DHCP Server with DDNS
+## Step 3: Configure DHCP Server with DDNS
 
-### Edit the DHCP configuration file:
+### Edit the DHCP configuration file
 
 ```bash
 sudo nano /etc/dhcp/dhcpd.conf
@@ -161,148 +127,134 @@ sudo nano /etc/dhcp/dhcpd.conf
 Add the following configuration:
 
 ```
-# Include the DDNS key
-include "/etc/named/ddns.key";
+# DHCP with DDNS Configuration
 
-# DDNS Settings
+# Define the DDNS key (must match the key in named.conf)
+key "ddns-key" {
+    algorithm hmac-sha256;
+    secret "YourStaticSecretKey123456789";  # Use the same key as in named.conf
+};
+
+# DDNS configuration
 ddns-updates on;
 ddns-update-style interim;
 update-static-leases on;
-use-host-decl-names on;
-
-# Define how DHCP should communicate with DNS
+ddns-domainname "mydomain.local.";
 ddns-rev-domainname "in-addr.arpa.";
 
-# Set the DDNS zone and key
-zone est.intra. {
-    primary 127.0.0.1;
-    key ddns-key;
+# Ignore client update requests - DHCP server will handle all updates
+ignore client-updates;
+
+# Overwrite client hostname with DHCP hostname option if present
+use-host-decl-names on;
+
+# DDNS zones configuration
+zone mydomain.local. {
+    key "ddns-key";
 }
 
 zone 1.168.192.in-addr.arpa. {
-    primary 127.0.0.1;
-    key ddns-key;
+    key "ddns-key";
 }
 
-# Basic DHCP settings
-default-lease-time 3600;
-max-lease-time 86400;
-
-# Define our subnet
+# DHCP subnet configuration
 subnet 192.168.1.0 netmask 255.255.255.0 {
     range 192.168.1.100 192.168.1.200;
     option routers 192.168.1.1;
-    option domain-name "est.intra";
     option domain-name-servers 192.168.1.1;
-    option broadcast-address 192.168.1.255;
-    ddns-domainname "est.intra.";
+    option domain-name "mydomain.local";
+    default-lease-time 3600;
+    max-lease-time 7200;
 }
 ```
 
-## 6. Start and Enable the Services
+## Step 4: Modify SELinux and Firewall Settings
 
-Start the DNS server and enable it to run at boot:
+### Configure SELinux to allow DDNS updates
 
 ```bash
-sudo systemctl enable --now named
+# Set SELinux to permissive mode for testing
+sudo setenforce 0
+
+# For permanent changes, edit the SELinux config file
+sudo nano /etc/selinux/config
+# Change SELINUX=enforcing to SELINUX=permissive
 ```
 
-Check the DNS service status:
+### Configure firewall to allow DNS and DHCP
 
 ```bash
-sudo systemctl status named
-```
-
-Start the DHCP server and enable it to run at boot:
-
-```bash
-sudo systemctl enable --now dhcpd
-```
-
-Check the DHCP service status:
-
-```bash
-sudo systemctl status dhcpd
-```
-
-## 7. Configure Firewall
-
-Allow DNS and DHCP through the firewall:
-
-```bash
-sudo firewall-cmd --permanent --add-service=dns
 sudo firewall-cmd --permanent --add-service=dhcp
+sudo firewall-cmd --permanent --add-service=dns
 sudo firewall-cmd --reload
 ```
 
-## 8. Configure SELinux
-
-If you're using SELinux (enabled by default on Fedora), allow DHCP to update DNS:
+## Step 5: Start and Enable the Services
 
 ```bash
-sudo setsebool -P named_write_master_zones 1
-sudo setsebool -P dhcpd_read_db 1
+# Start and enable the DNS service
+sudo systemctl enable named
+sudo systemctl start named
+
+# Start and enable the DHCP service
+sudo systemctl enable dhcpd
+sudo systemctl start dhcpd
 ```
 
-## 9. Testing Your Configuration
+## Step 6: Test the Configuration
 
-On your client machine, configure the network interface to use DHCP:
+### Check the status of the services
 
 ```bash
-sudo nmcli con mod eth0 ipv4.method auto
-sudo nmcli con down eth0 && sudo nmcli con up eth0
+sudo systemctl status named
+sudo systemctl status dhcpd
 ```
 
-Verify that your client received an IP address:
+### Configure the client machine to get an IP via DHCP
 
+- On the client VM, ensure the network interface is set to receive DHCP addresses
+- You might need to restart the network service or reboot the client
+
+### Verify that the client gets an IP and is added to DNS
+
+On the server, check the DHCP leases:
 ```bash
-ip addr show eth0
+cat /var/lib/dhcpd/dhcpd.leases
 ```
 
-Check if the hostname was registered in DNS:
-
+Verify DNS entries were created:
 ```bash
-host $(hostname)
+dig @192.168.1.1 client-hostname.mydomain.local
 ```
 
-Or use nslookup or dig:
-
+Check the reverse DNS entry:
 ```bash
-nslookup $(hostname)
-dig $(hostname)
+dig @192.168.1.1 -x client-ip-address
 ```
 
-## Troubleshooting Tips
+## Troubleshooting
 
-1. Check DHCP server logs:
+1. Check logs for errors:
 ```bash
+sudo journalctl -u named
 sudo journalctl -u dhcpd
 ```
 
-2. Check DNS server logs:
+2. Verify that BIND is accepting DDNS updates:
 ```bash
-sudo journalctl -u named
+sudo named-checkconf /etc/named.conf
 ```
 
-3. Verify DNS zone updates:
+3. Ensure the keys in both DHCP and DNS configurations match exactly
+
+4. Make sure the zone files have the correct permissions:
 ```bash
-sudo rndc dumpdb -zones
-cat /var/named/data/named_dump.db
+sudo chown named:named /var/named/*.zone
 ```
 
-4. Manually test DNS updates:
+5. Try manually updating DNS to test the configuration:
 ```bash
-nsupdate -k /path/to/Kddns-key.*.private
-> server 127.0.0.1
-> zone est.intra
-> update add test.est.intra 86400 A 192.168.1.123
-> send
-> quit
+nsupdate -k /path/to/keyfile
 ```
 
-5. Clear DNS cache if needed:
-```bash
-sudo rndc flush
-```
-
-This configuration will ensure that whenever a client connects to your network, it will automatically receive an IP address from the DHCP server, and its hostname and IP address will be registered in the DNS zone files, allowing other machines on the network to resolve its hostname.
+This configuration sets up a basic DHCP with DDNS that will automatically add client hostnames to your DNS zone files whenever they connect to the network. The configuration uses a static secret key instead of generating one with dnssec-keygen, making it simpler for a prototype setup.
