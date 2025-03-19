@@ -1,11 +1,6 @@
-I'll help you set up DHCP and DDNS (Dynamic DNS) on your virtual machines so that whenever a client connects, it automatically gets an IP address and its hostname is added to the DNS zone files. I'll simplify the configuration by using a static secret key instead of generating one with dnssec-keygen.
+I'll modify the configuration to use the domain name `est.intra` with `dns.est.intra` as the DNS server and ensure clients are registered as `client.est.intra`. Here's the updated configuration:
 
 # Configuring DHCP with DDNS on Fedora Server
-
-## Prerequisites
-- You have two virtual machines:
-  - Server VM with Fedora Server installed (will host DHCP and DNS)
-  - Client VM (will be the DHCP client)
 
 ## Step 1: Install Required Packages on the Server
 
@@ -53,9 +48,9 @@ logging {
 };
 
 // Forward zone configuration
-zone "mydomain.local" IN {
+zone "est.intra" IN {
     type master;
-    file "mydomain.local.zone";
+    file "est.intra.zone";
     allow-update { key "ddns-key"; };  // Allow updates using the key
 };
 
@@ -70,22 +65,22 @@ zone "1.168.192.in-addr.arpa" IN {
 ### Create the forward zone file
 
 ```bash
-sudo nano /var/named/mydomain.local.zone
+sudo nano /var/named/est.intra.zone
 ```
 
 Add the following content:
 
 ```
 $TTL 86400
-@       IN      SOA     ns1.mydomain.local. admin.mydomain.local. (
+@       IN      SOA     dns.est.intra. admin.est.intra. (
                         2023032901      ; Serial
                         3600            ; Refresh (1 hour)
                         1800            ; Retry (30 minutes)
                         604800          ; Expire (1 week)
                         86400 )         ; Minimum TTL (1 day)
 ;
-@       IN      NS      ns1.mydomain.local.
-ns1     IN      A       192.168.1.1     ; Your server IP
+@       IN      NS      dns.est.intra.
+dns     IN      A       192.168.1.1     ; Your server IP
 ```
 
 ### Create the reverse zone file
@@ -98,21 +93,21 @@ Add the following content:
 
 ```
 $TTL 86400
-@       IN      SOA     ns1.mydomain.local. admin.mydomain.local. (
+@       IN      SOA     dns.est.intra. admin.est.intra. (
                         2023032901      ; Serial
                         3600            ; Refresh (1 hour)
                         1800            ; Retry (30 minutes)
                         604800          ; Expire (1 week)
                         86400 )         ; Minimum TTL (1 day)
 ;
-@       IN      NS      ns1.mydomain.local.
-1       IN      PTR     ns1.mydomain.local.  ; Your server IP's last octet
+@       IN      NS      dns.est.intra.
+1       IN      PTR     dns.est.intra.  ; Your server IP's last octet
 ```
 
 ### Set correct permissions for the zone files
 
 ```bash
-sudo chown named:named /var/named/mydomain.local.zone
+sudo chown named:named /var/named/est.intra.zone
 sudo chown named:named /var/named/1.168.192.in-addr.arpa.zone
 ```
 
@@ -129,6 +124,10 @@ Add the following configuration:
 ```
 # DHCP with DDNS Configuration
 
+# Global parameters
+authoritative;
+log-facility local7;
+
 # Define the DDNS key (must match the key in named.conf)
 key "ddns-key" {
     algorithm hmac-sha256;
@@ -139,7 +138,7 @@ key "ddns-key" {
 ddns-updates on;
 ddns-update-style interim;
 update-static-leases on;
-ddns-domainname "mydomain.local.";
+ddns-domainname "est.intra.";
 ddns-rev-domainname "in-addr.arpa.";
 
 # Ignore client update requests - DHCP server will handle all updates
@@ -149,12 +148,14 @@ ignore client-updates;
 use-host-decl-names on;
 
 # DDNS zones configuration
-zone mydomain.local. {
+zone est.intra. {
     key "ddns-key";
+    primary 192.168.1.1;  # Your DNS server IP
 }
 
 zone 1.168.192.in-addr.arpa. {
     key "ddns-key";
+    primary 192.168.1.1;  # Your DNS server IP
 }
 
 # DHCP subnet configuration
@@ -162,13 +163,25 @@ subnet 192.168.1.0 netmask 255.255.255.0 {
     range 192.168.1.100 192.168.1.200;
     option routers 192.168.1.1;
     option domain-name-servers 192.168.1.1;
-    option domain-name "mydomain.local";
+    option domain-name "est.intra";
     default-lease-time 3600;
     max-lease-time 7200;
+    
+    # Enable client domain name updates
+    ddns-hostname = concat("client-", binary-to-ascii(10, 8, "-", leased-address));
+    ddns-domain-name "est.intra";
 }
+
+# You can also add static host declarations for specific clients
+# Example:
+# host specific-client {
+#     hardware ethernet 00:11:22:33:44:55;
+#     fixed-address 192.168.1.50;
+#     option host-name "client1";
+# }
 ```
 
-## Step 4: Modify SELinux and Firewall Settings
+## Step 4: Configure SELinux and Firewall Settings
 
 ### Configure SELinux to allow DDNS updates
 
@@ -201,60 +214,57 @@ sudo systemctl enable dhcpd
 sudo systemctl start dhcpd
 ```
 
-## Step 6: Test the Configuration
-
-### Check the status of the services
+## Step 6: Check configuration files for syntax errors
 
 ```bash
-sudo systemctl status named
-sudo systemctl status dhcpd
+# Check the BIND configuration
+sudo named-checkconf /etc/named.conf
+
+# Check the zone files
+sudo named-checkzone est.intra /var/named/est.intra.zone
+sudo named-checkzone 1.168.192.in-addr.arpa /var/named/1.168.192.in-addr.arpa.zone
+
+# Check the DHCP configuration
+sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
 ```
 
-### Configure the client machine to get an IP via DHCP
+## Step 7: Verify DDNS is working
 
-- On the client VM, ensure the network interface is set to receive DHCP addresses
-- You might need to restart the network service or reboot the client
+When a client connects, it should automatically get an IP address and its hostname should be added to the DNS zone files. You can verify this by:
 
-### Verify that the client gets an IP and is added to DNS
+1. On the client, request an IP address:
+```bash
+sudo dhclient -v
+```
 
-On the server, check the DHCP leases:
+2. On the server, check if the client was added to DNS:
+```bash
+dig @192.168.1.1 client-192-168-1-100.est.intra
+```
+
+3. Check the DHCP leases file:
 ```bash
 cat /var/lib/dhcpd/dhcpd.leases
 ```
 
-Verify DNS entries were created:
+4. Check for DNS updates in the BIND logs:
 ```bash
-dig @192.168.1.1 client-hostname.mydomain.local
+sudo journalctl -u named | grep update
 ```
 
-Check the reverse DNS entry:
-```bash
-dig @192.168.1.1 -x client-ip-address
+## Additional Notes
+
+1. The configuration automatically generates client hostnames in the format `client-IP-ADDRESS.est.intra` (e.g., `client-192-168-1-100.est.intra`).
+
+2. If you want clients to use their own hostnames, modify the DHCP configuration to:
+```
+ddns-hostname = option host-name;
 ```
 
-## Troubleshooting
-
-1. Check logs for errors:
+3. For troubleshooting, check the log files:
 ```bash
 sudo journalctl -u named
 sudo journalctl -u dhcpd
 ```
 
-2. Verify that BIND is accepting DDNS updates:
-```bash
-sudo named-checkconf /etc/named.conf
-```
-
-3. Ensure the keys in both DHCP and DNS configurations match exactly
-
-4. Make sure the zone files have the correct permissions:
-```bash
-sudo chown named:named /var/named/*.zone
-```
-
-5. Try manually updating DNS to test the configuration:
-```bash
-nsupdate -k /path/to/keyfile
-```
-
-This configuration sets up a basic DHCP with DDNS that will automatically add client hostnames to your DNS zone files whenever they connect to the network. The configuration uses a static secret key instead of generating one with dnssec-keygen, making it simpler for a prototype setup.
+This configuration will ensure that whenever a client connects to your network, it will automatically get an IP address via DHCP and its hostname and IP will be registered in the DNS zone files, allowing other machines to resolve its name.
