@@ -1,0 +1,308 @@
+Based on your request, I'll provide you with the configuration steps for setting up DHCP with DDNS (Dynamic DNS) on your virtual machines. This will allow client machines to automatically obtain IP addresses and have their hostnames registered in the DNS zone files.
+
+## Configuration Overview
+
+You'll need to configure two virtual machines:
+1. Server VM: Running both DHCP and DNS services
+2. Client VM: Will automatically obtain IP address and have its hostname registered in DNS
+
+Let's go through the detailed configuration steps:
+
+## Server Configuration (DHCP + DNS)
+
+### 1. Install Required Packages
+
+```bash
+sudo dnf install dhcp-server bind bind-utils
+```
+
+### 2. Configure DHCP Server
+
+Edit the DHCP configuration file:
+
+```bash
+sudo nano /etc/dhcp/dhcpd.conf
+```
+
+Add the following content:
+
+```
+# DHCP with Dynamic DNS Configuration
+
+# Global DDNS settings
+ddns-update-style interim;
+ddns-domainname "est.intra.";
+ddns-rev-domainname "in-addr.arpa.";
+ddns-updates on;
+ignore client-updates;
+update-static-leases on;
+
+# Define the DNS server that will receive dynamic updates
+server-identifier dhcp-dns.est.intra;
+
+# Define the key for secure updates
+key DDNS_UPDATE {
+    algorithm hmac-md5;
+    secret "your_secret_key_here";
+}
+
+# Define the zone that will be updated
+zone est.intra. {
+    primary 127.0.0.1;
+    key DDNS_UPDATE;
+}
+
+# Define the reverse zone
+zone 1.168.192.in-addr.arpa. {
+    primary 127.0.0.1;
+    key DDNS_UPDATE;
+}
+
+# Define the subnet and IP range
+subnet 192.168.1.0 netmask 255.255.255.0 {
+    range 192.168.1.10 192.168.1.200;
+    option routers 192.168.1.1;
+    option domain-name "est.intra";
+    option domain-name-servers 192.168.1.1;
+    default-lease-time 3600;
+    max-lease-time 7200;
+}
+```
+
+### 3. Configure DNS Server (BIND)
+
+Edit the main BIND configuration file:
+
+```bash
+sudo nano /etc/named.conf
+```
+
+Add the following content:
+
+```
+// BIND configuration for DDNS
+
+options {
+    listen-on port 53 { 127.0.0.1; 192.168.1.1; };
+    listen-on-v6 port 53 { ::1; };
+    directory "/var/named";
+    dump-file "/var/named/data/cache_dump.db";
+    statistics-file "/var/named/data/named_stats.txt";
+    memstatistics-file "/var/named/data/named_mem_stats.txt";
+    
+    allow-query { localhost; 192.168.1.0/24; };
+    allow-transfer { localhost; };
+    
+    recursion yes;
+    dnssec-enable yes;
+    dnssec-validation yes;
+    
+    // Define the key for secure updates
+    include "/etc/named/ddns-key.conf";
+};
+
+logging {
+    channel default_debug {
+        file "data/named.run";
+        severity dynamic;
+    };
+};
+
+// Forward zone
+zone "est.intra" IN {
+    type master;
+    file "est.intra.zone";
+    allow-update { key DDNS_UPDATE; };
+};
+
+// Reverse zone
+zone "1.168.192.in-addr.arpa" IN {
+    type master;
+    file "1.168.192.in-addr.arpa.zone";
+    allow-update { key DDNS_UPDATE; };
+};
+```
+
+### 4. Create DDNS Key
+
+Generate a key for secure DDNS updates:
+
+```bash
+sudo dnssec-keygen -a HMAC-MD5 -b 128 -n HOST DDNS_UPDATE
+```
+
+Create the key configuration file:
+
+```bash
+sudo nano /etc/named/ddns-key.conf
+```
+
+Add the following content (replace with your generated key):
+
+```
+key DDNS_UPDATE {
+    algorithm hmac-md5;
+    secret "your_secret_key_here";
+};
+```
+
+### 5. Create Zone Files
+
+Create the forward zone file:
+
+```bash
+sudo nano /var/named/est.intra.zone
+```
+
+Add the following content:
+
+```
+$TTL 86400
+@       IN SOA  dhcp-dns.est.intra. admin.est.intra. (
+                                        2023030101 ; serial
+                                        3600       ; refresh
+                                        1800       ; retry
+                                        604800     ; expire
+                                        86400      ; minimum
+                                    )
+        IN NS   dhcp-dns.est.intra.
+dhcp-dns IN A   192.168.1.1
+```
+
+Create the reverse zone file:
+
+```bash
+sudo nano /var/named/1.168.192.in-addr.arpa.zone
+```
+
+Add the following content:
+
+```
+$TTL 86400
+@       IN SOA  dhcp-dns.est.intra. admin.est.intra. (
+                                        2023030101 ; serial
+                                        3600       ; refresh
+                                        1800       ; retry
+                                        604800     ; expire
+                                        86400      ; minimum
+                                    )
+        IN NS   dhcp-dns.est.intra.
+1       IN PTR  dhcp-dns.est.intra.
+```
+
+### 6. Set Permissions
+
+```bash
+sudo chown -R named:named /var/named
+sudo chown named:named /etc/named/ddns-key.conf
+sudo chmod 640 /etc/named/ddns-key.conf
+```
+
+### 7. Start and Enable Services
+
+```bash
+# Start and enable DNS service
+sudo systemctl enable --now named
+
+# Start and enable DHCP service
+sudo systemctl enable --now dhcpd
+```
+
+### 8. Configure Firewall
+
+```bash
+sudo firewall-cmd --permanent --add-service=dns
+sudo firewall-cmd --permanent --add-service=dhcp
+sudo firewall-cmd --reload
+```
+
+## Client Configuration
+
+Your client should be configured to obtain an IP address automatically via DHCP. Generally, this is the default setting for most operating systems.
+
+For Linux clients:
+1. Configure the network interface to use DHCP:
+
+```bash
+sudo nmcli connection modify "Wired connection 1" ipv4.method auto
+sudo nmcli connection up "Wired connection 1"
+```
+
+2. Make sure the client sends its hostname to the DHCP server:
+
+```bash
+sudo hostnamectl set-hostname client1.est.intra
+```
+
+3. Update the NetworkManager configuration:
+
+```bash
+sudo nano /etc/NetworkManager/NetworkManager.conf
+```
+
+Add the following:
+
+```
+[main]
+dhcp=dhclient
+
+[connection]
+ipv4.dhcp-send-hostname=true
+```
+
+4. Restart NetworkManager:
+
+```bash
+sudo systemctl restart NetworkManager
+```
+
+## Testing the Configuration
+
+1. From the server, check that the DHCP and DNS services are running:
+
+```bash
+sudo systemctl status dhcpd
+sudo systemctl status named
+```
+
+2. From the client, request a new IP address:
+
+```bash
+sudo dhclient -r
+sudo dhclient
+```
+
+3. Check if the client has received an IP address:
+
+```bash
+ip addr show
+```
+
+4. Verify that the DNS records have been updated:
+
+```bash
+dig client1.est.intra @192.168.1.1
+```
+
+5. Check the reverse DNS lookup:
+
+```bash
+dig -x <client_ip_address> @192.168.1.1
+```
+
+6. You can also check the DHCP leases file on the server:
+
+```bash
+cat /var/lib/dhcpd/dhcpd.leases
+```
+
+7. On the server, check the DNS zone files to see if the client entries have been added:
+
+```bash
+sudo cat /var/named/est.intra.zone
+sudo cat /var/named/1.168.192.in-addr.arpa.zone
+```
+
+The client's hostname and IP address should be automatically added to these zone files when it connects to the network.
+
+This configuration will allow your client machines to automatically obtain IP addresses and have their hostnames registered in the DNS zone files. The DDNS feature will ensure that the DNS records are updated whenever a client gets a new IP address from the DHCP server.
