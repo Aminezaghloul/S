@@ -1,114 +1,131 @@
-I can see that you're encountering an error with the DHCP service failing to start. Let's fix this issue.
+I can see from your error logs that you're having a configuration file error in your DHCP server. The specific error is:
 
-The error message shows:
 ```
-Job for dhcpd.service failed because the control process exited with error code.
-See "systemctl status dhcpd.service" and "journalctl -xeu dhcpd.service" for details.
+Configuration file errors encountered -- exiting
 ```
 
-First, let's check the detailed error message to understand what's causing the problem:
+Let's fix the DHCP configuration file by creating a simpler, correct configuration. Here's what we'll do:
 
-```bash
-sudo systemctl status dhcpd.service
-```
-
-And also check the journal logs:
-
-```bash
-sudo journalctl -xeu dhcpd.service
-```
-
-Based on common issues with DHCP service failures, here are some possible solutions:
-
-1. Check your DHCP configuration file for syntax errors:
+1. First, let's check your DHCP configuration for syntax errors:
 
 ```bash
 sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
 ```
 
-2. The most likely issue is a syntax error in your dhcpd.conf file. Let's edit it and make sure it's correct:
+2. Let's create a new, clean DHCP configuration file:
 
 ```bash
+sudo mv /etc/dhcp/dhcpd.conf /etc/dhcp/dhcpd.conf.bak
 sudo nano /etc/dhcp/dhcpd.conf
 ```
 
-Here's a simplified and corrected DHCP configuration with DDNS that should work:
+3. Add this simplified configuration to the file:
 
 ```
-# DHCP with DDNS Configuration
+# Basic DHCP configuration with DDNS
 authoritative;
 
-# Define the DDNS key (must match the key in named.conf)
+# Define the DDNS key
 key "ddns-key" {
-    algorithm hmac-sha256;
-    secret "YourStaticSecretKey123456789";
+  algorithm hmac-sha256;
+  secret "YourStaticSecretKey123456789";
 }
 
-# Basic DDNS configuration
+# DDNS configuration
 ddns-update-style interim;
 ddns-updates on;
-update-static-leases on;
 ignore client-updates;
 
-# Domain configuration
+# Domain settings
 option domain-name "est.intra";
 option domain-name-servers 192.168.1.1;
 
 # DDNS zones
 zone est.intra. {
-    primary 192.168.1.1;
-    key ddns-key;
+  primary 192.168.1.1;
+  key ddns-key;
 }
 
 zone 1.168.192.in-addr.arpa. {
-    primary 192.168.1.1;
-    key ddns-key;
+  primary 192.168.1.1;
+  key ddns-key;
 }
 
-# Subnet declaration
+# Network configuration
 subnet 192.168.1.0 netmask 255.255.255.0 {
-    range 192.168.1.100 192.168.1.200;
-    option routers 192.168.1.1;
-    default-lease-time 3600;
-    max-lease-time 7200;
+  range 192.168.1.100 192.168.1.200;
+  option routers 192.168.1.1;
+  default-lease-time 3600;
+  max-lease-time 7200;
 }
 ```
 
-3. Make sure you have the correct interface specified for DHCP. Check which interface DHCP should be listening on:
-
-```bash
-ip a
-```
-
-Then edit the DHCP service configuration:
+4. Check if there's an issue with your network interface. Make sure the DHCP server knows which interface to use:
 
 ```bash
 sudo nano /etc/sysconfig/dhcpd
 ```
 
-Add your network interface name to the DHCPDARGS line:
+Add your network interface (like eth0 or enp0s3):
+
 ```
-DHCPDARGS="eth0"  # Replace eth0 with your actual interface name
+DHCPDARGS="eth0"  # Replace with your actual interface
 ```
 
-4. Ensure your network interface is up and has the correct IP:
+5. Check if your IP is correctly set on the interface:
 
 ```bash
-sudo ip addr add 192.168.1.1/24 dev eth0  # Replace eth0 with your interface name
-sudo ip link set eth0 up
+ip addr
 ```
 
-5. If the above doesn't work, check for any conflicting DHCP servers on your network and also check for permission issues:
+If your server doesn't have the 192.168.1.1 IP address, set it:
 
 ```bash
-sudo chown root:root /etc/dhcp/dhcpd.conf
-sudo chmod 644 /etc/dhcp/dhcpd.conf
+sudo ip addr add 192.168.1.1/24 dev eth0  # Replace eth0 with your interface
 ```
 
-After making these changes, try restarting the DHCP service:
+6. Check for syntax errors in the new configuration:
+
+```bash
+sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
+```
+
+7. Start the DHCP service:
 
 ```bash
 sudo systemctl restart dhcpd
 ```
 
-If you're still facing issues, please share the output of `systemctl status dhcpd.service` so I can provide more specific guidance.
+If you're still experiencing issues, there might be a problem with the interaction between DHCP and DNS. Make sure that the key in both configurations matches exactly.
+
+Check your named.conf file to ensure the key section matches:
+
+```bash
+sudo nano /etc/named.conf
+```
+
+The key section in named.conf should look like:
+
+```
+key "ddns-key" {
+    algorithm hmac-sha256;
+    secret "YourStaticSecretKey123456789";
+};
+```
+
+Make sure the secret is exactly the same in both the DHCP and DNS configuration files.
+
+After making these changes, restart both services:
+
+```bash
+sudo systemctl restart named
+sudo systemctl restart dhcpd
+```
+
+If you're still encountering issues, please let me know the specific error message from:
+
+```bash
+sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
+```
+
+This will help identify the exact syntax error in your configuration.
