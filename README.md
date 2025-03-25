@@ -1,48 +1,24 @@
-Je constate deux problèmes principaux dans vos captures d'écran:
-
-1. Le service DHCP ne démarre pas à cause d'une erreur dans la configuration ou l'override
-2. BIND signale des problèmes avec les zones DNS
-
-## Résolution des problèmes
-
-### 1. Corriger le service DHCP
-
-Le problème principal est que votre fichier override pour dhcpd n'est pas correctement configuré.
-
-```bash
-# Supprimer le fichier override actuel qui cause des problèmes
-sudo rm /etc/systemd/system/dhcpd.service.d/override.conf
-
-# Créer un nouveau fichier override correct
-sudo mkdir -p /etc/systemd/system/dhcpd.service.d/
-sudo nano /etc/systemd/system/dhcpd.service.d/override.conf
-```
-
-Dans ce fichier, écrivez exactement:
-```
-[Service]
-ExecStart=
-ExecStart=/usr/sbin/dhcpd -f -cf /etc/dhcp/dhcpd.conf -user dhcpd -group dhcpd
-```
-
-### 2. Corriger la configuration DHCP
+Pour que les clients soient automatiquement ajoutés aux zones DNS lorsqu'ils obtiennent une adresse IP et font un ping, vous devez vous assurer que la configuration DDNS est correctement paramétrée. Voici la configuration pour résoudre ce dernier problème :
 
 ```bash
 sudo nano /etc/dhcp/dhcpd.conf
 ```
 
-Remplacez tout le contenu par:
+Modifiez la configuration pour inclure les paramètres suivants :
+
 ```
-# Configuration DHCP simple
+# Configuration DHCP avec DDNS
 authoritative;
 
-# Configuration DDNS
+# Configuration cruciale pour DDNS
 ddns-updates on;
 ddns-update-style interim;
 update-static-leases on;
 ignore client-updates;
+update-optimization off;
+update-conflict-detection false;
 
-# Configuration des noms d'hôte automatiques
+# Paramètres de nommage automatique
 ddns-hostname = concat("client-", binary-to-ascii(10, 8, "-", leased-address));
 ddns-domainname "est.intra.";
 ddns-rev-domainname "in-addr.arpa.";
@@ -72,82 +48,36 @@ subnet 192.168.1.0 netmask 255.255.255.0 {
     option domain-name "est.intra";
     default-lease-time 3600;
     max-lease-time 7200;
+    
+    # Activation des mises à jour DDNS pour cette plage
+    ddns-updates on;
 }
 ```
 
-### 3. Corriger les zones DNS
+Ensuite, redémarrez le service DHCP :
 
 ```bash
-# Vérifier que les fichiers de zone existent
-ls -la /var/named/est.intra.zone
-ls -la /var/named/192.168.1.rev
-
-# Si nécessaire, recréer ces fichiers
-sudo nano /var/named/est.intra.zone
-```
-
-```
-$TTL 86400
-@       IN      SOA     ns1.est.intra. admin.est.intra. (
-                         2024032502 ; Serial
-                         3600       ; Refresh
-                         1800       ; Retry
-                         604800     ; Expire
-                         86400 )    ; Minimum TTL
-        IN      NS      ns1.est.intra.
-ns1     IN      A       192.168.1.1
-```
-
-```bash
-sudo nano /var/named/192.168.1.rev
-```
-
-```
-$TTL 86400
-@       IN      SOA     ns1.est.intra. admin.est.intra. (
-                        2024032502 ; Serial
-                        3600       ; Refresh
-                        1800       ; Retry
-                        604800     ; Expire
-                        86400 )    ; Minimum TTL
-        IN      NS      ns1.est.intra.
-1       IN      PTR     ns1.est.intra.
-```
-
-### 4. Corriger les permissions
-
-```bash
-# Corriger les permissions
-sudo chown -R named:named /var/named
-sudo chmod 664 /var/named/est.intra.zone
-sudo chmod 664 /var/named/192.168.1.rev
-sudo restorecon -R /var/named
-
-# Configurer SELinux pour BIND
-sudo setsebool -P named_write_master_zones 1
-
-# La commande dhcpd_write_leases n'existe pas dans toutes les versions de SELinux
-# Ne l'utilisez que si elle existe
-```
-
-### 5. Redémarrer les services
-
-```bash
-# Recharger systemd
-sudo systemctl daemon-reload
-
-# Redémarrer BIND
-sudo systemctl restart named
-
-# Redémarrer DHCP
 sudo systemctl restart dhcpd
 ```
 
-### 6. Vérifier l'état des services
+Sur le client, renouvelez le bail DHCP et effectuez un ping :
 
 ```bash
-sudo systemctl status named
-sudo systemctl status dhcpd
+sudo dhclient -r
+sudo dhclient
+ping ns1.est.intra
 ```
 
-Ces corrections devraient résoudre les problèmes avec vos services DHCP et DNS. Si vous continuez à rencontrer des problèmes, veuillez partager les messages d'erreur spécifiques pour que je puisse vous aider davantage.
+Vérifiez que l'enregistrement a bien été ajouté à la zone DNS :
+
+```bash
+sudo cat /var/named/est.intra.zone
+```
+
+Si l'enregistrement n'apparaît pas automatiquement, redémarrez aussi le service BIND :
+
+```bash
+sudo systemctl restart named
+```
+
+Cette configuration permet au serveur DHCP de mettre à jour automatiquement les zones DNS lorsqu'un client obtient une adresse IP, et l'enregistrement devrait apparaître même après un simple ping.
