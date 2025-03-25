@@ -1,94 +1,39 @@
-Je vais modifier la configuration pour que le serveur DNS et DHCP soit à l'adresse 192.168.1.1 au lieu de 192.168.5.130. Voici la configuration complète mise à jour:
+Je vois que votre requête DNS pour ns1.est.intra fonctionne mais qu'il y a un problème avec la mise à jour dynamique du DNS (DDNS) puisque les clients n'apparaissent pas automatiquement dans la zone DNS.
 
-## 1. Configuration complète du serveur DNS (BIND)
+Voici comment résoudre ce problème:
 
-### Fichier /etc/named.conf
-```
-// Configuration complète de BIND pour est.intra avec DDNS
+1. D'abord, vérifiez que le service DHCP fonctionne correctement et distribue des adresses IP.
 
-options {
-    listen-on port 53 { 127.0.0.1; 192.168.1.1; };  // Adresse IP serveur 192.168.1.1
-    listen-on-v6 port 53 { ::1; };
-    directory "/var/named";
-    dump-file "/var/named/data/cache_dump.db";
-    statistics-file "/var/named/data/named_stats.txt";
-    memstatistics-file "/var/named/data/named_mem_stats.txt";
-    recursion yes;
-    allow-query { localhost; 192.168.1.0/24; };
-    allow-transfer { none; };
-    
-    dnssec-validation yes;
-};
+2. Configurez correctement les permissions pour permettre les mises à jour dynamiques:
 
-logging {
-    channel default_debug {
-        file "data/named.run";
-        severity dynamic;
-    };
-};
-
-// Définition de la clé DDNS avec une clé base64 valide
-key "ddns-key" {
-    algorithm hmac-md5;
-    secret "8TBzJIkCJhHk7cgmISJRoA==";
-};
-
-// Configuration de la zone est.intra
-zone "est.intra" IN {
-    type master;
-    file "est.intra.zone";
-    allow-update { key "ddns-key"; };
-};
-
-// Configuration de la zone inverse
-zone "1.168.192.in-addr.arpa" IN {
-    type master;
-    file "192.168.1.rev";
-    allow-update { key "ddns-key"; };
-};
+```bash
+sudo chown -R named:named /var/named
+sudo chmod 664 /var/named/est.intra.zone
+sudo chmod 664 /var/named/192.168.1.rev
+sudo restorecon -R /var/named
 ```
 
-### Fichier /var/named/est.intra.zone
-```
-$TTL 86400
-@       IN      SOA     ns1.est.intra. admin.est.intra. (
-                         2024032501 ; Serial
-                         3600       ; Refresh
-                         1800       ; Retry
-                         604800     ; Expire
-                         86400 )    ; Minimum TTL
-        IN      NS      ns1.est.intra.
-ns1     IN      A       192.168.1.1
+3. Modifiez la configuration de DHCP pour s'assurer que les mises à jour DNS sont correctement configurées:
+
+```bash
+sudo nano /etc/dhcp/dhcpd.conf
 ```
 
-### Fichier /var/named/192.168.1.rev
-```
-$TTL 86400
-@       IN      SOA     ns1.est.intra. admin.est.intra. (
-                        2024032501 ; Serial
-                        3600       ; Refresh
-                        1800       ; Retry
-                        604800     ; Expire
-                        86400 )    ; Minimum TTL
-        IN      NS      ns1.est.intra.
-1       IN      PTR     ns1.est.intra.
-```
+Assurez-vous d'avoir cette configuration:
 
-## 2. Configuration du serveur DHCP avec DDNS
-
-### Fichier /etc/dhcp/dhcpd.conf
 ```
 # Configuration DHCP avec DDNS pour est.intra
 authoritative;
 
 # Options globales
+ddns-updates on;
 ddns-update-style interim;
 ddns-domainname "est.intra.";
 ddns-rev-domainname "in-addr.arpa.";
 update-static-leases on;
-ignore client-updates;
+allow client-updates;  # Changez "ignore client-updates" à "allow client-updates"
 
-# Définition de la clé DDNS - exactement la même que dans named.conf
+# Définition de la clé DDNS
 key "ddns-key" {
     algorithm hmac-md5;
     secret "8TBzJIkCJhHk7cgmISJRoA==";
@@ -96,12 +41,12 @@ key "ddns-key" {
 
 # Associations des zones avec la clé
 zone est.intra. {
-    primary 127.0.0.1;
+    primary 192.168.1.1;  # Utiliser l'IP du serveur plutôt que 127.0.0.1
     key "ddns-key";
 }
 
 zone 1.168.192.in-addr.arpa. {
-    primary 127.0.0.1;
+    primary 192.168.1.1;  # Utiliser l'IP du serveur plutôt que 127.0.0.1
     key "ddns-key";
 }
 
@@ -109,7 +54,7 @@ zone 1.168.192.in-addr.arpa. {
 subnet 192.168.1.0 netmask 255.255.255.0 {
     range 192.168.1.100 192.168.1.200;
     option routers 192.168.1.1;
-    option domain-name-servers 192.168.1.1;  # Adresse IP du serveur DNS (192.168.1.1)
+    option domain-name-servers 192.168.1.1;
     option domain-name "est.intra";
     default-lease-time 3600;
     max-lease-time 7200;
@@ -119,39 +64,68 @@ subnet 192.168.1.0 netmask 255.255.255.0 {
 }
 ```
 
-## 3. Configuration de l'interface réseau
-
-Vous devez configurer l'interface réseau du serveur pour qu'elle utilise l'adresse IP 192.168.1.1. Si vous utilisez NetworkManager:
+4. Ajustez également la configuration de BIND pour s'assurer que les mises à jour dynamiques fonctionnent:
 
 ```bash
-# Identifier le nom de votre interface réseau (eth0, enp0s3, etc.)
-ip addr show
-
-# Configurer l'interface avec l'adresse IP 192.168.1.1
-sudo nmcli connection modify "nom_de_votre_connexion" ipv4.method manual ipv4.addresses 192.168.1.1/24
-sudo nmcli connection down "nom_de_votre_connexion"
-sudo nmcli connection up "nom_de_votre_connexion"
+sudo nano /etc/named.conf
 ```
 
-## 4. Commandes d'application et vérification
+Modifiez la section des zones comme ceci:
+
+```
+// Configuration de la zone est.intra
+zone "est.intra" IN {
+    type master;
+    file "est.intra.zone";
+    allow-update { key "ddns-key"; };
+    notify yes;
+    also-notify { 192.168.1.1; };
+};
+
+// Configuration de la zone inverse
+zone "1.168.192.in-addr.arpa" IN {
+    type master;
+    file "192.168.1.rev";
+    allow-update { key "ddns-key"; };
+    notify yes;
+    also-notify { 192.168.1.1; };
+};
+```
+
+5. Si vous utilisez SELinux, assurez-vous qu'il est configuré pour permettre les mises à jour dynamiques:
 
 ```bash
-# Corriger les permissions des fichiers de zone
-sudo chown -R named:named /var/named
-sudo chmod 640 /var/named/est.intra.zone /var/named/192.168.1.rev
+sudo setsebool -P named_write_master_zones 1
+sudo setsebool -P dhcpd_write_leases 1
+```
 
-# Vérifier la configuration
-sudo named-checkconf
-sudo named-checkzone est.intra /var/named/est.intra.zone
-sudo named-checkzone 1.168.192.in-addr.arpa /var/named/192.168.1.rev
+6. Redémarrez les services:
 
-# Redémarrer les services
+```bash
 sudo systemctl restart named
 sudo systemctl restart dhcpd
-
-# Vérifier l'état des services
-sudo systemctl status named
-sudo systemctl status dhcpd
 ```
 
-Cette configuration place le serveur DNS et DHCP à l'adresse 192.168.1.1, conformément à votre demande. Assurez-vous que votre interface réseau est correctement configurée avec cette adresse IP avant de démarrer les services.
+7. Vérifiez que DHCP et DNS fonctionnent correctement:
+
+```bash
+# Vérifiez les logs pour DHCP
+sudo journalctl -u dhcpd -n 50
+
+# Vérifiez les logs pour BIND
+sudo journalctl -u named -n 50
+```
+
+8. Sur un client, renouvelez le bail DHCP:
+
+```bash
+# Si le client utilise NetworkManager
+sudo nmcli connection down "nom_de_connexion"
+sudo nmcli connection up "nom_de_connexion"
+
+# Ou avec ip/dhclient
+sudo dhclient -r
+sudo dhclient
+```
+
+Ces modifications devraient permettre aux clients d'être automatiquement ajoutés à la zone DNS lorsqu'ils obtiennent une adresse IP via DHCP.
