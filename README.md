@@ -1,35 +1,49 @@
-Pour que le serveur DNS ajoute automatiquement le nom d'hôte et l'adresse IP des clients à la zone DNS lorsqu'ils font un ping, nous devons modifier la configuration DHCP pour inclure la mise à jour des enregistrements PTR (reverse) et A (forward) dans la zone DNS.
+Maintenant je comprends mieux le problème. Vous avez deux interfaces réseau sur votre serveur:
+- Une interface sur le réseau 192.168.1.0/24 (avec l'adresse 192.168.1.1)
+- Une autre interface sur le réseau 192.168.5.0/24 (avec l'adresse 192.168.5.130)
 
-Voici les modifications nécessaires pour que cela fonctionne correctement:
+Et le client reçoit toujours une adresse IP du réseau 192.168.5.0/24 au lieu du réseau 192.168.1.0/24.
 
-## 1. Modification du fichier dhcpd.conf
+Voici comment résoudre ce problème spécifique:
+
+## 1. Configuration DHCP pour spécifier l'interface exacte
+
+Modifiez le fichier /etc/sysconfig/dhcpd pour spécifier l'interface qui est connectée au réseau 192.168.1.0/24:
+
+```bash
+sudo nano /etc/sysconfig/dhcpd
+```
+
+```
+# Spécifiez UNIQUEMENT l'interface connectée au réseau 192.168.1.0/24
+# Remplacez "interface_name" par le nom réel de votre interface (ex: ens160, eth0, etc.)
+DHCPDARGS="interface_name"
+```
+
+## 2. Vérifiez les interfaces réseau et leurs adresses
+
+```bash
+ip addr show
+```
+
+Notez le nom exact de l'interface connectée au réseau 192.168.1.0/24 et utilisez-le dans DHCPDARGS.
+
+## 3. Configurez DHCP pour servir uniquement le réseau 192.168.1.0/24
 
 ```bash
 sudo nano /etc/dhcp/dhcpd.conf
 ```
 
-Modifiez le fichier comme suit:
-
 ```
 # Configuration DHCP avec DDNS pour est.intra
-
-# Configuration globale
 authoritative;
-log-facility local7;
 
-# Configuration DDNS - cruciale pour l'enregistrement automatique
+# Configuration DDNS
 ddns-updates on;
 ddns-update-style interim;
 update-static-leases on;
 allow client-updates;
-update-conflict-detection false;
-
-# Important - utiliser le nom d'hôte du client
-use-host-decl-names on;
-get-lease-hostnames true;
-
-# Ces lignes sont essentielles pour que le nom d'hôte soit ajouté automatiquement
-ddns-hostname = pick-first-value(option host-name, host-decl-name, concat("client-", binary-to-ascii(10, 8, "-", leased-address)));
+ddns-hostname = concat("client-", binary-to-ascii(10, 8, "-", leased-address));
 ddns-domainname "est.intra.";
 ddns-rev-domainname "in-addr.arpa.";
 
@@ -50,7 +64,7 @@ zone 1.168.192.in-addr.arpa. {
     key "ddns-key";
 }
 
-# Configuration du réseau 192.168.1.0/24
+# Configuration UNIQUEMENT pour le réseau 192.168.1.0/24
 subnet 192.168.1.0 netmask 255.255.255.0 {
     range 192.168.1.100 192.168.1.200;
     option routers 192.168.1.1;
@@ -62,77 +76,45 @@ subnet 192.168.1.0 netmask 255.255.255.0 {
     # Activer DDNS pour cette plage
     ddns-updates on;
 }
+
+# Déclarer le réseau 192.168.5.0/24 sans plage d'adresses
+# Cette déclaration est nécessaire si l'interface est sur ce réseau,
+# mais nous ne voulons pas distribuer d'adresses
+subnet 192.168.5.0 netmask 255.255.255.0 {
+    # Ne pas inclure de directive "range" ici
+    # Cela déclare juste que le serveur connaît ce réseau
+    # mais ne distribuera pas d'adresses
+}
 ```
 
-## 2. Assurez-vous que la configuration du client fournit un nom d'hôte
+## 4. Assurez-vous que l'interface du client est correctement connectée
 
-Sur chaque client, assurez-vous que le nom d'hôte est correctement configuré:
+Vérifiez que le client est physiquement connecté au réseau 192.168.1.0/24 et non au réseau 192.168.5.0/24.
 
-```bash
-# Vérifier le nom d'hôte actuel
-hostname
+## 5. Si nécessaire, forcez le client à demander une adresse spécifique
 
-# Si nécessaire, définir un nom d'hôte permanent
-sudo hostnamectl set-hostname client1.est.intra
-```
-
-## 3. Configuration pour forcer l'envoi du nom d'hôte pendant les requêtes DHCP
-
-Sur le client, modifiez le fichier de configuration dhclient:
+Sur le client, vous pouvez configurer dhclient pour demander explicitement une adresse du réseau 192.168.1.0/24:
 
 ```bash
 sudo nano /etc/dhcp/dhclient.conf
 ```
 
-Ajoutez ou modifiez les lignes suivantes:
-
+Ajoutez:
 ```
-send host-name = gethostname();
-supersede host-name = gethostname();
+# Demander une adresse dans le réseau 192.168.1.0/24
+send dhcp-requested-address 192.168.1.150;
 ```
 
-## 4. Redémarrer les services sur le serveur
+## 6. Redémarrer les services et tester
 
 ```bash
-sudo systemctl restart named
 sudo systemctl restart dhcpd
 ```
 
-## 5. Renouveler le bail DHCP sur le client
-
+Sur le client:
 ```bash
 sudo dhclient -r
 sudo dhclient -v
 ```
 
-## 6. Vérification
-
-Pour vérifier que tout fonctionne correctement:
-
-1. Sur le client:
-   ```bash
-   ping ns1.est.intra
-   ```
-
-2. Sur le serveur, vérifiez les zones DNS:
-   ```bash
-   sudo cat /var/named/est.intra.zone
-   sudo cat /var/named/192.168.1.rev
-   ```
-
-3. Vérifiez les journaux DDNS:
-   ```bash
-   sudo tail -f /var/log/named-ddns.log
-   ```
-
-4. Vérifiez que vous pouvez résoudre le nom du client depuis le serveur:
-   ```bash
-   dig @localhost client1.est.intra
-   ```
-
-5. Vérifiez la résolution inverse:
-   ```bash
-   dig @localhost -x 192.168.1.101  # Remplacez par l'IP du client
-   ```
-
-Si tout est correctement configuré, lorsqu'un client obtient une adresse IP via DHCP, son nom d'hôte et son adresse IP seront automatiquement ajoutés aux zones DNS directe et inverse, même s'il fait simplement un ping. Le serveur DHCP envoie les mises à jour DNS au nom du client.
+Ces modifications devraient forcer votre serveur DHCP à distribuer uniquement des adresses du réseau 192.168.1.0/24 et à ignorer les demandes sur le réseau 192.168.5.0/24.
