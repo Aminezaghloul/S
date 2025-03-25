@@ -1,38 +1,48 @@
-Maintenant je comprends mieux le problème. Vous avez deux interfaces réseau sur votre serveur:
-- Une interface sur le réseau 192.168.1.0/24 (avec l'adresse 192.168.1.1)
-- Une autre interface sur le réseau 192.168.5.0/24 (avec l'adresse 192.168.5.130)
+Je vois maintenant le problème clé. Le fichier `/etc/sysconfig/dhcpd` contient explicitement un message indiquant qu'il n'est plus utilisé dans les versions récentes de Fedora/RHEL:
 
-Et le client reçoit toujours une adresse IP du réseau 192.168.5.0/24 au lieu du réseau 192.168.1.0/24.
+```
+# WARNING: This file is NOT used anymore.
+```
 
-Voici comment résoudre ce problème spécifique:
+Pour résoudre ce problème, vous devez créer un fichier d'override pour systemd:
 
-## 1. Configuration DHCP pour spécifier l'interface exacte
-
-Modifiez le fichier /etc/sysconfig/dhcpd pour spécifier l'interface qui est connectée au réseau 192.168.1.0/24:
+## 1. Créer un fichier d'override pour le service DHCP
 
 ```bash
-sudo nano /etc/sysconfig/dhcpd
+# Créer le répertoire systemd override
+sudo mkdir -p /etc/systemd/system/dhcpd.service.d/
+
+# Créer le fichier de configuration override
+sudo nano /etc/systemd/system/dhcpd.service.d/override.conf
 ```
 
+Dans ce fichier, ajoutez:
 ```
-# Spécifiez UNIQUEMENT l'interface connectée au réseau 192.168.1.0/24
-# Remplacez "interface_name" par le nom réel de votre interface (ex: ens160, eth0, etc.)
-DHCPDARGS="interface_name"
+[Service]
+# Remplacez ens160 par l'interface connectée au réseau 192.168.1.0/24
+ExecStart=/usr/sbin/dhcpd -f -cf /etc/dhcp/dhcpd.conf -user dhcpd -group dhcpd --no-pid ens160
 ```
 
-## 2. Vérifiez les interfaces réseau et leurs adresses
+## 2. Recharger la configuration de systemd et redémarrer le service dhcpd
 
 ```bash
-ip addr show
+sudo systemctl daemon-reload
+sudo systemctl restart dhcpd
 ```
 
-Notez le nom exact de l'interface connectée au réseau 192.168.1.0/24 et utilisez-le dans DHCPDARGS.
+## 3. Vérifiez que le service fonctionne correctement
 
-## 3. Configurez DHCP pour servir uniquement le réseau 192.168.1.0/24
+```bash
+sudo systemctl status dhcpd
+```
+
+## 4. Assurez-vous que votre configuration dhcpd.conf est correcte
 
 ```bash
 sudo nano /etc/dhcp/dhcpd.conf
 ```
+
+Assurez-vous que votre configuration contient uniquement une section pour le réseau 192.168.1.0/24:
 
 ```
 # Configuration DHCP avec DDNS pour est.intra
@@ -43,6 +53,9 @@ ddns-updates on;
 ddns-update-style interim;
 update-static-leases on;
 allow client-updates;
+
+# Options pour nommer les clients
+use-host-decl-names on;
 ddns-hostname = concat("client-", binary-to-ascii(10, 8, "-", leased-address));
 ddns-domainname "est.intra.";
 ddns-rev-domainname "in-addr.arpa.";
@@ -64,7 +77,7 @@ zone 1.168.192.in-addr.arpa. {
     key "ddns-key";
 }
 
-# Configuration UNIQUEMENT pour le réseau 192.168.1.0/24
+# Uniquement le réseau 192.168.1.0/24
 subnet 192.168.1.0 netmask 255.255.255.0 {
     range 192.168.1.100 192.168.1.200;
     option routers 192.168.1.1;
@@ -77,44 +90,7 @@ subnet 192.168.1.0 netmask 255.255.255.0 {
     ddns-updates on;
 }
 
-# Déclarer le réseau 192.168.5.0/24 sans plage d'adresses
-# Cette déclaration est nécessaire si l'interface est sur ce réseau,
-# mais nous ne voulons pas distribuer d'adresses
-subnet 192.168.5.0 netmask 255.255.255.0 {
-    # Ne pas inclure de directive "range" ici
-    # Cela déclare juste que le serveur connaît ce réseau
-    # mais ne distribuera pas d'adresses
-}
+# Ne déclarez pas de subnet pour 192.168.5.0/24 si vous ne voulez pas y distribuer d'adresses
 ```
 
-## 4. Assurez-vous que l'interface du client est correctement connectée
-
-Vérifiez que le client est physiquement connecté au réseau 192.168.1.0/24 et non au réseau 192.168.5.0/24.
-
-## 5. Si nécessaire, forcez le client à demander une adresse spécifique
-
-Sur le client, vous pouvez configurer dhclient pour demander explicitement une adresse du réseau 192.168.1.0/24:
-
-```bash
-sudo nano /etc/dhcp/dhclient.conf
-```
-
-Ajoutez:
-```
-# Demander une adresse dans le réseau 192.168.1.0/24
-send dhcp-requested-address 192.168.1.150;
-```
-
-## 6. Redémarrer les services et tester
-
-```bash
-sudo systemctl restart dhcpd
-```
-
-Sur le client:
-```bash
-sudo dhclient -r
-sudo dhclient -v
-```
-
-Ces modifications devraient forcer votre serveur DHCP à distribuer uniquement des adresses du réseau 192.168.1.0/24 et à ignorer les demandes sur le réseau 192.168.5.0/24.
+Cette configuration devrait forcer le serveur DHCP à n'écouter que sur l'interface spécifiée (connectée au réseau 192.168.1.0/24) et à ne distribuer que des adresses IP de ce réseau.
