@@ -1,12 +1,13 @@
-Je vais corriger la configuration complète en utilisant uniquement le réseau 192.168.1.0, conformément au PDF. Voici les configurations mises à jour :
+Je vais modifier la configuration pour que le serveur DNS et DHCP soit à l'adresse 192.168.1.1 au lieu de 192.168.5.130. Voici la configuration complète mise à jour:
 
-## 1. Configuration de BIND (/etc/named.conf)
+## 1. Configuration complète du serveur DNS (BIND)
 
+### Fichier /etc/named.conf
 ```
 // Configuration complète de BIND pour est.intra avec DDNS
 
 options {
-    listen-on port 53 { 127.0.0.1; 192.168.1.1; };  // IP du serveur sur le réseau 192.168.1.0
+    listen-on port 53 { 127.0.0.1; 192.168.1.1; };  // Adresse IP serveur 192.168.1.1
     listen-on-v6 port 53 { ::1; };
     directory "/var/named";
     dump-file "/var/named/data/cache_dump.db";
@@ -26,10 +27,10 @@ logging {
     };
 };
 
-// Définition de la clé DDNS
+// Définition de la clé DDNS avec une clé base64 valide
 key "ddns-key" {
     algorithm hmac-md5;
-    secret "Ef5gH6jK7lM8nO9pQ0rS1t==";
+    secret "8TBzJIkCJhHk7cgmISJRoA==";
 };
 
 // Configuration de la zone est.intra
@@ -47,8 +48,7 @@ zone "1.168.192.in-addr.arpa" IN {
 };
 ```
 
-## 2. Fichier de zone directe (/var/named/est.intra.zone)
-
+### Fichier /var/named/est.intra.zone
 ```
 $TTL 86400
 @       IN      SOA     ns1.est.intra. admin.est.intra. (
@@ -61,8 +61,7 @@ $TTL 86400
 ns1     IN      A       192.168.1.1
 ```
 
-## 3. Fichier de zone inverse (/var/named/192.168.1.rev)
-
+### Fichier /var/named/192.168.1.rev
 ```
 $TTL 86400
 @       IN      SOA     ns1.est.intra. admin.est.intra. (
@@ -75,8 +74,9 @@ $TTL 86400
 1       IN      PTR     ns1.est.intra.
 ```
 
-## 4. Configuration DHCP (/etc/dhcp/dhcpd.conf)
+## 2. Configuration du serveur DHCP avec DDNS
 
+### Fichier /etc/dhcp/dhcpd.conf
 ```
 # Configuration DHCP avec DDNS pour est.intra
 authoritative;
@@ -88,10 +88,10 @@ ddns-rev-domainname "in-addr.arpa.";
 update-static-leases on;
 ignore client-updates;
 
-# Définition de la clé DDNS (même clé que dans named.conf)
+# Définition de la clé DDNS - exactement la même que dans named.conf
 key "ddns-key" {
     algorithm hmac-md5;
-    secret "Ef5gH6jK7lM8nO9pQ0rS1t==";
+    secret "8TBzJIkCJhHk7cgmISJRoA==";
 }
 
 # Associations des zones avec la clé
@@ -109,7 +109,7 @@ zone 1.168.192.in-addr.arpa. {
 subnet 192.168.1.0 netmask 255.255.255.0 {
     range 192.168.1.100 192.168.1.200;
     option routers 192.168.1.1;
-    option domain-name-servers 192.168.1.1;
+    option domain-name-servers 192.168.1.1;  # Adresse IP du serveur DNS (192.168.1.1)
     option domain-name "est.intra";
     default-lease-time 3600;
     max-lease-time 7200;
@@ -119,13 +119,26 @@ subnet 192.168.1.0 netmask 255.255.255.0 {
 }
 ```
 
-## 5. Commandes pour appliquer la configuration
+## 3. Configuration de l'interface réseau
+
+Vous devez configurer l'interface réseau du serveur pour qu'elle utilise l'adresse IP 192.168.1.1. Si vous utilisez NetworkManager:
 
 ```bash
-# Corriger les permissions
+# Identifier le nom de votre interface réseau (eth0, enp0s3, etc.)
+ip addr show
+
+# Configurer l'interface avec l'adresse IP 192.168.1.1
+sudo nmcli connection modify "nom_de_votre_connexion" ipv4.method manual ipv4.addresses 192.168.1.1/24
+sudo nmcli connection down "nom_de_votre_connexion"
+sudo nmcli connection up "nom_de_votre_connexion"
+```
+
+## 4. Commandes d'application et vérification
+
+```bash
+# Corriger les permissions des fichiers de zone
 sudo chown -R named:named /var/named
-sudo chmod 640 /var/named/est.intra.zone
-sudo chmod 640 /var/named/192.168.1.rev
+sudo chmod 640 /var/named/est.intra.zone /var/named/192.168.1.rev
 
 # Vérifier la configuration
 sudo named-checkconf
@@ -141,27 +154,4 @@ sudo systemctl status named
 sudo systemctl status dhcpd
 ```
 
-## 6. Configuration d'interface réseau (si nécessaire)
-
-Si vous devez configurer l'interface réseau du serveur manuellement :
-
-```bash
-# Configurer l'adresse IP statique pour le serveur
-sudo nmcli connection modify "System eth0" ipv4.method manual ipv4.addresses 192.168.1.1/24
-sudo nmcli connection down "System eth0"
-sudo nmcli connection up "System eth0"
-```
-
-## 7. Vérification après configuration
-
-Sur le serveur :
-```bash
-# Vérifier que named fonctionne
-dig @localhost est.intra
-
-# Vérifier les logs pour débogage
-sudo journalctl -u named --since "15 minutes ago"
-sudo journalctl -u dhcpd --since "15 minutes ago"
-```
-
-Cette configuration utilise exclusivement le réseau 192.168.1.0/24, avec le serveur DNS et DHCP à l'adresse 192.168.1.1, conformément au schéma présenté dans le PDF.
+Cette configuration place le serveur DNS et DHCP à l'adresse 192.168.1.1, conformément à votre demande. Assurez-vous que votre interface réseau est correctement configurée avec cette adresse IP avant de démarrer les services.
