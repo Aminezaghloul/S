@@ -1,37 +1,12 @@
-Je vais vous fournir une configuration complète, étape par étape, avec la clé DDNS que je vais générer moi-même. Cette configuration permettra de mettre en place un serveur DHCP et DNS avec DDNS (Dynamic DNS) pour le domaine "est.intra".
+Je vais corriger la configuration complète en utilisant uniquement le réseau 192.168.1.0, conformément au PDF. Voici les configurations mises à jour :
 
-# Configuration complète DHCP et DDNS pour le domaine est.intra
-
-## 1. Installation des paquets nécessaires
-
-```bash
-sudo dnf install bind bind-utils dhcp-server -y
-```
-
-## 2. Génération de la clé DDNS
-
-```bash
-# Générer la clé
-sudo dnssec-keygen -a HMAC-MD5 -b 128 -n HOST ddns-key
-
-# Récupérer la valeur de la clé
-sudo cat Kddns-key*.private | grep Key
-```
-
-Pour cet exemple, nous utiliserons une clé générée : `Ef5gH6jK7lM8nO9pQ0rS1t==`
-
-## 3. Configuration du serveur DNS (BIND)
-
-Éditer le fichier de configuration principal:
-
-```bash
-sudo nano /etc/named.conf
-```
+## 1. Configuration de BIND (/etc/named.conf)
 
 ```
-// Fichier de configuration BIND pour le domaine est.intra
+// Configuration complète de BIND pour est.intra avec DDNS
+
 options {
-    listen-on port 53 { 127.0.0.1; 192.168.1.1; };
+    listen-on port 53 { 127.0.0.1; 192.168.1.1; };  // IP du serveur sur le réseau 192.168.1.0
     listen-on-v6 port 53 { ::1; };
     directory "/var/named";
     dump-file "/var/named/data/cache_dump.db";
@@ -41,7 +16,6 @@ options {
     allow-query { localhost; 192.168.1.0/24; };
     allow-transfer { none; };
     
-    dnssec-enable yes;
     dnssec-validation yes;
 };
 
@@ -73,13 +47,7 @@ zone "1.168.192.in-addr.arpa" IN {
 };
 ```
 
-## 4. Création des fichiers de zone DNS
-
-Créer le fichier de zone directe:
-
-```bash
-sudo nano /var/named/est.intra.zone
-```
+## 2. Fichier de zone directe (/var/named/est.intra.zone)
 
 ```
 $TTL 86400
@@ -93,11 +61,7 @@ $TTL 86400
 ns1     IN      A       192.168.1.1
 ```
 
-Créer le fichier de zone inverse:
-
-```bash
-sudo nano /var/named/192.168.1.rev
-```
+## 3. Fichier de zone inverse (/var/named/192.168.1.rev)
 
 ```
 $TTL 86400
@@ -111,19 +75,7 @@ $TTL 86400
 1       IN      PTR     ns1.est.intra.
 ```
 
-## 5. Configurer les permissions pour les fichiers de zone
-
-```bash
-sudo chown -R named:named /var/named
-sudo chmod 640 /var/named/est.intra.zone
-sudo chmod 640 /var/named/192.168.1.rev
-```
-
-## 6. Configuration du serveur DHCP avec support DDNS
-
-```bash
-sudo nano /etc/dhcp/dhcpd.conf
-```
+## 4. Configuration DHCP (/etc/dhcp/dhcpd.conf)
 
 ```
 # Configuration DHCP avec DDNS pour est.intra
@@ -167,113 +119,49 @@ subnet 192.168.1.0 netmask 255.255.255.0 {
 }
 ```
 
-## 7. Configuration du pare-feu et SELinux
+## 5. Commandes pour appliquer la configuration
 
 ```bash
-# Ouvrir les ports nécessaires dans le pare-feu
-sudo firewall-cmd --permanent --add-service=dns
-sudo firewall-cmd --permanent --add-service=dhcp
-sudo firewall-cmd --reload
+# Corriger les permissions
+sudo chown -R named:named /var/named
+sudo chmod 640 /var/named/est.intra.zone
+sudo chmod 640 /var/named/192.168.1.rev
 
-# Configurer SELinux pour autoriser les mises à jour DDNS
-sudo setsebool -P named_write_master_zones 1
-```
-
-## 8. Démarrage et activation des services
-
-```bash
-# Vérifier la configuration DNS
+# Vérifier la configuration
 sudo named-checkconf
 sudo named-checkzone est.intra /var/named/est.intra.zone
 sudo named-checkzone 1.168.192.in-addr.arpa /var/named/192.168.1.rev
 
-# Démarrer et activer le service DNS
-sudo systemctl enable named
-sudo systemctl start named
-sudo systemctl status named
+# Redémarrer les services
+sudo systemctl restart named
+sudo systemctl restart dhcpd
 
-# Démarrer et activer le service DHCP
-sudo systemctl enable dhcpd
-sudo systemctl start dhcpd
+# Vérifier l'état des services
+sudo systemctl status named
 sudo systemctl status dhcpd
 ```
 
-## 9. Configuration du client
+## 6. Configuration d'interface réseau (si nécessaire)
 
-Sur la machine cliente, configurez la connexion réseau pour utiliser DHCP:
+Si vous devez configurer l'interface réseau du serveur manuellement :
 
 ```bash
-# Si vous utilisez NetworkManager
-sudo nmcli connection modify "System eth0" ipv4.method auto
+# Configurer l'adresse IP statique pour le serveur
+sudo nmcli connection modify "System eth0" ipv4.method manual ipv4.addresses 192.168.1.1/24
 sudo nmcli connection down "System eth0"
 sudo nmcli connection up "System eth0"
-
-# OU si vous préférez éditer directement le fichier
-sudo nano /etc/sysconfig/network-scripts/ifcfg-eth0
 ```
 
-Avec le contenu:
-```
-DEVICE=eth0
-BOOTPROTO=dhcp
-ONBOOT=yes
-```
+## 7. Vérification après configuration
 
-Puis redémarrez le réseau:
+Sur le serveur :
 ```bash
-sudo systemctl restart NetworkManager
+# Vérifier que named fonctionne
+dig @localhost est.intra
+
+# Vérifier les logs pour débogage
+sudo journalctl -u named --since "15 minutes ago"
+sudo journalctl -u dhcpd --since "15 minutes ago"
 ```
 
-## 10. Vérification de la configuration
-
-Sur le serveur:
-
-```bash
-# Vérifier que le service DNS fonctionne
-sudo dig @localhost est.intra
-
-# Vérifier que le service DHCP fonctionne
-sudo systemctl status dhcpd
-
-# Vérifier les baux DHCP
-sudo cat /var/lib/dhcpd/dhcpd.leases
-
-# Surveiller les logs pour le débogage
-sudo tail -f /var/log/messages
-```
-
-Sur le client:
-
-```bash
-# Vérifier l'attribution d'adresse IP
-ip addr show
-
-# Tester la résolution DNS
-ping ns1.est.intra
-
-# Vérifier que le client a bien été ajouté automatiquement à la zone DNS
-dig @192.168.1.1 -x $(hostname -I | awk '{print $1}')
-```
-
-## Résolution des problèmes courants
-
-1. **Les mises à jour DNS ne fonctionnent pas**:
-   - Vérifiez les logs: `sudo journalctl -u named -u dhcpd`
-   - Assurez-vous que la clé est correctement configurée dans les deux fichiers
-   - Vérifiez que SELinux autorise les mises à jour: `sudo getsebool named_write_master_zones`
-
-2. **Problèmes de permissions**:
-   ```bash
-   sudo chown -R named:named /var/named
-   sudo chmod 640 /var/named/est.intra.zone /var/named/192.168.1.rev
-   sudo chmod 750 /var/named/data
-   ```
-
-3. **Problèmes avec SELinux**:
-   ```bash
-   sudo setenforce 0  # Désactiver temporairement SELinux pour tester
-   # Si cela résout le problème, configurer correctement SELinux plutôt que de le désactiver
-   sudo setenforce 1  # Réactiver SELinux
-   ```
-
-Cette configuration complète vous permettra d'avoir un serveur DHCP avec DDNS qui ajoutera automatiquement les clients dans la zone DNS lorsqu'ils obtiendront une adresse IP.
+Cette configuration utilise exclusivement le réseau 192.168.1.0/24, avec le serveur DNS et DHCP à l'adresse 192.168.1.1, conformément au schéma présenté dans le PDF.
